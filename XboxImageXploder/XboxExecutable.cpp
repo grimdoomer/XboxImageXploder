@@ -285,10 +285,10 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 	// Copy the xbe header to the new buffer.
 	XBE_IMAGE_HEADER *pXbeHeader = (XBE_IMAGE_HEADER*)pbNewHeader;
 	*pXbeHeader = this->sHeader;
-	pXbeHeader->SizeOfImageHeader = sizeof(XBE_IMAGE_HEADER);
+	pXbeHeader->SizeOfImageHeader = this->sHeader.SizeOfImageHeader;
 
 	// Copy the xbe certificate to the new buffer.
-	XBE_IMAGE_CERTIFICATE *pCertificate = (XBE_IMAGE_CERTIFICATE*)ALIGN_TO(((PBYTE)pXbeHeader + this->sHeader.SizeOfImageHeader), 4);
+	XBE_IMAGE_CERTIFICATE *pCertificate = (XBE_IMAGE_CERTIFICATE*)ALIGN_TO(((PBYTE)pXbeHeader + pXbeHeader->SizeOfImageHeader), 4);
 	*pCertificate = this->sCertificate;
 
 	// Update certificate address.
@@ -303,7 +303,7 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 
 	// Loop through all of the section headers and correct the section name addresses.
 	WORD *pSharedPagePtr = (WORD*)ALIGN_TO(pSectionHeaders + pXbeHeader->NumberOfSections, 4);
-	char *pNamePtr = (char*)ALIGN_TO(pSharedPagePtr + pXbeHeader->NumberOfSections, 4);
+	char *pNamePtr = (char*)ALIGN_TO(pSharedPagePtr + pXbeHeader->NumberOfSections + 1, 4);
 	for (int i = 0; i < pXbeHeader->NumberOfSections; i++)
 	{
 		// Update the section header shared head/tail page address.
@@ -327,17 +327,23 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 	pXbeHeader->KernelLibraryVersionAddress += pXbeHeader->LibraryVersionsAddress;
 	pXbeHeader->XAPILibraryVersionAddress += pXbeHeader->LibraryVersionsAddress;
 
-	// Check if there are library features, and if so copy them to the new buffer.
+	// Setup pointer to additional header data.
 	BYTE *pbNextPointer = (PBYTE)(pLibraryVersions + pXbeHeader->NumberOfLibraryVersions);
-	if (pXbeHeader->NumberOfLibraryFeatures > 0)
-	{
-		// Copy library features to the new buffer.
-		XBOX_LIBRARY_VERSION *pLibraryFeatures = (XBOX_LIBRARY_VERSION*)ALIGN_TO(pLibraryVersions + pXbeHeader->NumberOfLibraryVersions, 4);
-		memcpy(pLibraryFeatures, this->pLibraryFeatures, sizeof(XBOX_LIBRARY_VERSION) * pXbeHeader->NumberOfLibraryFeatures);
 
-		// Update the library features address.
-		pXbeHeader->LibraryFeaturesAddress = XBE_HEADER_ADDRESS_OF(pXbeHeader, pLibraryFeatures);
-		pbNextPointer += (DWORD)(pXbeHeader->NumberOfLibraryFeatures * sizeof(XBOX_LIBRARY_VERSION));
+	// Check the original size of the header to determine if it was possible to have library features or not.
+	if (this->sHeader.SizeOfImageHeader > FIELD_OFFSET(XBE_IMAGE_HEADER, LibraryFeaturesAddress))
+	{
+		// Check if there are library features, and if so copy them to the new buffer.
+		if (pXbeHeader->NumberOfLibraryFeatures > 0)
+		{
+			// Copy library features to the new buffer.
+			XBOX_LIBRARY_VERSION *pLibraryFeatures = (XBOX_LIBRARY_VERSION*)ALIGN_TO(pLibraryVersions + pXbeHeader->NumberOfLibraryVersions, 4);
+			memcpy(pLibraryFeatures, this->pLibraryFeatures, sizeof(XBOX_LIBRARY_VERSION) * pXbeHeader->NumberOfLibraryFeatures);
+
+			// Update the library features address.
+			pXbeHeader->LibraryFeaturesAddress = XBE_HEADER_ADDRESS_OF(pXbeHeader, pLibraryFeatures);
+			pbNextPointer += (DWORD)(pXbeHeader->NumberOfLibraryFeatures * sizeof(XBOX_LIBRARY_VERSION));
+		}
 	}
 
 	// Copy the debug file name (unicode).
@@ -360,8 +366,7 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 	// Update the logo bitmap data address.
 	pXbeHeader->LogoBitmapAddress = XBE_HEADER_ADDRESS_OF(pXbeHeader, pbBitmapData);
 
-	// Update the total header size.
-	//pXbeHeader->SizeOfHeaders = ALIGN_TO(XBE_HEADER_OFFSET_OF(pXbeHeader, pXbeHeader->LogoBitmapAddress) + pXbeHeader->LogoBitmapSize, 4);
+	// Update the image size.
 	pXbeHeader->SizeOfImage += ALIGN_TO(pNewSection->VirtualSize, 4);
 
 	// Seek to the beginning of the file and write the new image header.
