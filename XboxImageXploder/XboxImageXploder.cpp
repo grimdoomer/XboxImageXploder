@@ -1,7 +1,7 @@
 // XboxImageXploder.cpp : Defines the entry point for the console application.
 //
 
-#include "stdafx.h"
+#include <Windows.h>
 #include <string>
 #include "XboxExecutable.h"
 
