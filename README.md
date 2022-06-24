@@ -5,15 +5,17 @@ XboxImageExploder is a command line tool for adding new executable code segments
 ```
 XboxImageXploder.exe <xbe_file> <section_name> <section_size>
 ```
-xbe_file: File path to the xbe file
-section_name: Name of the new code section
-section_size: Size of the new code section
+Where:
+- xbe_file: File path to the xbe file
+- section_name: Name of the new code section
+- section_size: Size of the new code section
 
+\
 Example usage to create a new segment of 8192 bytes called ".hacks":
 ```
 XboxImageXploder.exe X:\Xbox\Test\test.xbe .hacks 8192
 ```
-
+\
 After the segment is created the name, virtual address, virtual size, file offset, and file size of the new segment will be printed:
 ```
 Section Name:           .hacks
