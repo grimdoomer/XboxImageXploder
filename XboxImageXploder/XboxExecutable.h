@@ -3,14 +3,14 @@
 	
 	XboxExecutable.h - Types and functions for parsing and modifying xbox executable files.
 
-	January 17th, 2018
-		- Initial creation
+	Author - Grimdoomer
 */
 
 #pragma once
 #include <Windows.h>
 #include <string>
 #include <vector>
+#include <map>
 
 // ---------------------------------------------------------------------------------------
 // Types
@@ -18,7 +18,6 @@
 
 #define XBE_IMAGE_HEADER_MAGIC			'HEBX'
 
-#define XBE_IMAGE_HEADER_MAX_SIZE		4096
 #define XBE_IMAGE_HEADER_MIN_SIZE		0x170
 
 #define XBE_IMAGE_SIGNATURE_LENGTH				256
@@ -79,13 +78,6 @@ struct XBE_IMAGE_HEADER
 
 #define XBE_IMAGE_CERT_TITLE_NAME_LENGTH		40
 
-#define ONLINE_SERVICE_PRODUCTION_NET			0
-#define ONLINE_SERVICE_BETA_NET					'ATEB'
-#define ONLINE_SERVICE_PRE_PRODUCTION_NET		'DRPP'
-#define ONLINE_SERVICE_PARTNER_NET				'TRAP'
-#define ONLINE_SERVICE_TEST_NET					'TSET'
-#define ONLINE_SERVICE_GS_NET					'VRSG'
-
 #define XBE_IMAGE_CERTIFICATE_MIN_SIZE			0x1D0
 
 struct XBE_IMAGE_CERTIFICATE
@@ -139,6 +131,12 @@ struct XBOX_LIBRARY_VERSION
 	/* 0x0E */ WORD			Flags;
 };
 
+struct XBE_IMAGE_IMPORT_DESCRIPTOR
+{
+	/* 0x00 */ DWORD		ImageThunkData;
+	/* 0x04 */ DWORD		ModuleNameAddress;
+};
+
 // ---------------------------------------------------------------------------------------
 // XboxExecutable
 // ---------------------------------------------------------------------------------------
@@ -154,6 +152,8 @@ private:
 
 	XBE_IMAGE_SECTION_HEADER	*pSectionHeaders;
 	std::vector<std::string>	vSectionHeaderNames;
+
+	std::map<DWORD, std::wstring>	mImportDirectory;
 
 	XBOX_LIBRARY_VERSION		*pLibraryVersions;
 	XBOX_LIBRARY_VERSION		*pLibraryFeatures;

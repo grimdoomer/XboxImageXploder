@@ -3,8 +3,7 @@
 	
 	XboxExecutable.h - Types and functions for parsing and modifying xbox executable files.
 
-	January 17th, 2018
-		- Initial creation
+	Author - Grimdoomer
 */
 
 #include "XboxExecutable.h"
@@ -50,6 +49,8 @@ bool XboxExecutable::ReadExecutable()
 {
 	bool result = false;
 	DWORD BytesRead = 0;
+	BYTE abHeaderData[XBE_IMAGE_HEADER_MIN_SIZE];
+	BYTE* pbBuffer = nullptr;
 
 	// Open the image file for reading and writing.
 	this->hFileHandle = CreateFile(this->sFileName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -61,15 +62,33 @@ bool XboxExecutable::ReadExecutable()
 	}
 
 	// Check to make sure the file is large enough to be an executable.
-	if (GetFileSize(this->hFileHandle, nullptr) < XBE_IMAGE_HEADER_MAX_SIZE)
+	if (GetFileSize(this->hFileHandle, nullptr) < XBE_IMAGE_HEADER_MIN_SIZE)
 	{
 		// The file is too small to be a valid xbox executable.
 		printf("File is too small to be valid!\n");
 		return false;
 	}
 
+	// Read enough of the header to get the true size of the image headers.
+	if (ReadFile(this->hFileHandle, abHeaderData, XBE_IMAGE_HEADER_MIN_SIZE, &BytesRead, nullptr) == FALSE || BytesRead != XBE_IMAGE_HEADER_MIN_SIZE)
+	{
+		// Failed to read the image header.
+		printf("Failed to read image header!\n");
+		goto Cleanup;
+	}
+
+	// Validate the size of the image header.
+	XBE_IMAGE_HEADER* pTempHeader = (XBE_IMAGE_HEADER*)abHeaderData;
+	if (pTempHeader->SizeOfImageHeader < XBE_IMAGE_HEADER_MIN_SIZE)
+	{
+		// Image header size is invalid.
+		printf("Xbe image header size is invalid!\n");
+		goto Cleanup;
+	}
+
 	// Allocate a buffer we can use to read the executable header.
-	BYTE *pbBuffer = (PBYTE)malloc(XBE_IMAGE_HEADER_MAX_SIZE);
+	DWORD headersSize = pTempHeader->PEBaseAddress - pTempHeader->BaseAddress;
+	pbBuffer = (PBYTE)malloc(headersSize);
 	if (pbBuffer == nullptr)
 	{
 		// Not enough memory for allocation.
@@ -77,8 +96,11 @@ bool XboxExecutable::ReadExecutable()
 		return false;
 	}
 
+	// Seek back to the start of the image.
+	SetFilePointer(this->hFileHandle, 0, nullptr, FILE_BEGIN);
+
 	// Read the image header.
-	if (ReadFile(this->hFileHandle, pbBuffer, XBE_IMAGE_HEADER_MAX_SIZE, &BytesRead, nullptr) == FALSE || BytesRead != XBE_IMAGE_HEADER_MAX_SIZE)
+	if (ReadFile(this->hFileHandle, pbBuffer, headersSize, &BytesRead, nullptr) == FALSE || BytesRead != headersSize)
 	{
 		// Failed to read the image header.
 		printf("Failed to read image header!\n");
@@ -91,14 +113,6 @@ bool XboxExecutable::ReadExecutable()
 	{
 		// Xbe header is invalid.
 		printf("Xbe header has invalid magic!\n");
-		goto Cleanup;
-	}
-
-	// Validate the size of the image header.
-	if (this->sHeader.SizeOfImageHeader < XBE_IMAGE_HEADER_MIN_SIZE)
-	{
-		// Image header size is invalid.
-		printf("Xbe image header size is invalid!\n");
 		goto Cleanup;
 	}
 
@@ -144,6 +158,22 @@ bool XboxExecutable::ReadExecutable()
 		{
 			// No name, this should never happen.
 			this->vSectionHeaderNames.push_back(std::string());
+		}
+	}
+
+	// Check if there are import modules and if so read the import table.
+	if (this->sHeader.ImportTableAddress > 0)
+	{
+		// Loop and read all the import table entries.
+		XBE_IMAGE_IMPORT_DESCRIPTOR* pImportDescriptor = (XBE_IMAGE_IMPORT_DESCRIPTOR*)(pbBuffer + XBE_HEADER_OFFSET_OF(&this->sHeader, this->sHeader.ImportTableAddress));
+		while (pImportDescriptor->ImageThunkData != 0)
+		{
+			// Save the import module name.
+			WCHAR* pNamePtr = (WCHAR*)(pbBuffer + XBE_HEADER_OFFSET_OF(&this->sHeader, pImportDescriptor->ModuleNameAddress));
+			this->mImportDirectory.emplace(pImportDescriptor->ImageThunkData, std::wstring(pNamePtr));
+
+			// Next import entry.
+			pImportDescriptor++;
 		}
 	}
 
@@ -235,7 +265,15 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 	if (this->bIsValid == false)
 		return false;
 
-	// TODO: Check total header size to make sure there is enough space remaining for new section header + name.
+	// Check total header size to make sure there is enough space remaining for new section header + name.
+	DWORD headersSize = this->sHeader.PEBaseAddress - this->sHeader.BaseAddress;
+	DWORD sectionDataSize = sizeof(XBE_IMAGE_SECTION_HEADER) + ALIGN_TO(sectionName.length() + 1, 4);
+	if (headersSize < sectionDataSize)
+	{
+		// Not enough free space in image header to add a new section.
+		printf("Not enough space in image header to add a new section!\n");
+		return false;
+	}
 
 	// Allocate a new array for the section headers.
 	XBE_IMAGE_SECTION_HEADER *pNewSectionHeaders = (XBE_IMAGE_SECTION_HEADER*)malloc(sizeof(XBE_IMAGE_SECTION_HEADER) * (this->sHeader.NumberOfSections + 1));
@@ -261,9 +299,9 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 	// Initialize the new section header.
 	memset(pNewSection, 0, sizeof(XBE_IMAGE_SECTION_HEADER));
 	pNewSection->SectionFlags = (XBE_SECTION_FLAGS_WRITABLE | XBE_SECTION_FLAGS_PRELOAD | XBE_SECTION_FLAGS_EXECUTABLE);
-	pNewSection->VirtualAddress = ALIGN_TO(pLastSection->VirtualAddress + pLastSection->VirtualSize, 16);
+	pNewSection->VirtualAddress = ALIGN_TO(pLastSection->VirtualAddress + pLastSection->VirtualSize, 4096);
 	pNewSection->VirtualSize = ALIGN_TO(sectionSize, 4);
-	pNewSection->RawAddress = ALIGN_TO(pLastSection->RawAddress + pLastSection->RawSize, 0x1000);
+	pNewSection->RawAddress = ALIGN_TO(pLastSection->RawAddress + pLastSection->RawSize, 4096);
 	pNewSection->RawSize = ALIGN_TO(sectionSize, 4);
 	pNewSection->SectionNameReferenceCount = 0;
 
@@ -271,7 +309,7 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 	this->vSectionHeaderNames.push_back(sectionName);
 
 	// Allocate a new buffer for the header data.
-	BYTE *pbNewHeader = (PBYTE)malloc(XBE_IMAGE_HEADER_MAX_SIZE);
+	BYTE *pbNewHeader = (PBYTE)malloc(headersSize);
 	if (pbNewHeader == nullptr)
 	{
 		// Failed to allocate memory for new header buffer.
@@ -280,7 +318,7 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 	}
 
 	// Initialize the new header buffer.
-	memset(pbNewHeader, 0, XBE_IMAGE_HEADER_MAX_SIZE);
+	memset(pbNewHeader, 0, headersSize);
 
 	// Copy the xbe header to the new buffer.
 	XBE_IMAGE_HEADER *pXbeHeader = (XBE_IMAGE_HEADER*)pbNewHeader;
@@ -316,6 +354,35 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 		// Write name to buffer.
 		strcpy(pNamePtr, this->vSectionHeaderNames.at(i).c_str());
 		pNamePtr += this->vSectionHeaderNames.at(i).size() + 1;
+	}
+
+	// Check if the module contains an import table.
+	if (pXbeHeader->ImportTableAddress > 0)
+	{
+		// Update the import table address.
+		pNamePtr = (char*)ALIGN_TO(pNamePtr, 4);
+		pXbeHeader->ImportTableAddress = XBE_HEADER_ADDRESS_OF(pXbeHeader, pNamePtr);
+		pNamePtr += sizeof(XBE_IMAGE_IMPORT_DESCRIPTOR) * (this->mImportDirectory.size() + 1);
+
+		// Loop and write module import data.
+		XBE_IMAGE_IMPORT_DESCRIPTOR* pImportDescriptor = (XBE_IMAGE_IMPORT_DESCRIPTOR*)((BYTE*)pXbeHeader + XBE_HEADER_OFFSET_OF(pXbeHeader, pXbeHeader->ImportTableAddress));
+		for (auto iter = this->mImportDirectory.begin(); iter != this->mImportDirectory.end(); iter++)
+		{
+			// Write the import entry.
+			pImportDescriptor->ImageThunkData = iter->first;
+			pImportDescriptor->ModuleNameAddress = XBE_HEADER_ADDRESS_OF(pXbeHeader, pNamePtr);
+
+			// Write name to buffer.
+			lstrcpyW((WCHAR*)pNamePtr, iter->second.c_str());
+			pNamePtr += (iter->second.size() + 1) * sizeof(wchar_t);
+
+			// Next import entry.
+			pImportDescriptor++;
+		}
+
+		// Write a null entry to signal the end of the import table.
+		pImportDescriptor->ImageThunkData = 0;
+		pImportDescriptor->ModuleNameAddress = 0;
 	}
 
 	// Copy library versions to the new buffer.
@@ -371,7 +438,7 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 
 	// Seek to the beginning of the file and write the new image header.
 	SetFilePointer(this->hFileHandle, 0, nullptr, FILE_BEGIN);
-	if (WriteFile(this->hFileHandle, pbNewHeader, XBE_IMAGE_HEADER_MAX_SIZE, &BytesWritten, nullptr) == FALSE || BytesWritten != XBE_IMAGE_HEADER_MAX_SIZE)
+	if (WriteFile(this->hFileHandle, pbNewHeader, headersSize, &BytesWritten, nullptr) == FALSE || BytesWritten != headersSize)
 	{
 		// Failed to write new image headers.
 		printf("Failed to write new image headers to file!\n");
