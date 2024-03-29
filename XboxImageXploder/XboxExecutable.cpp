@@ -53,7 +53,7 @@ bool XboxExecutable::ReadExecutable()
 	BYTE* pbBuffer = nullptr;
 
 	// Open the image file for reading and writing.
-	this->hFileHandle = CreateFile(this->sFileName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	this->hFileHandle = CreateFileA(this->sFileName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (this->hFileHandle == INVALID_HANDLE_VALUE)
 	{
 		// Failed to open the file.
