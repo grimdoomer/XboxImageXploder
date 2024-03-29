@@ -1,14 +1,14 @@
 # XboxImageXploder
-XboxImageExploder is a command line tool for adding new executable code segments to original xbox executables. Use it to create code caves of any size where you can place new code or data for modifications to xbes. Multiple segments can be added and it works with both retail and debug executables.
+XboxImageXploder is a command line tool for adding new code segments to original xbox executables (XBEs). Use it to create code caves of any size where you can place new code or data for modifications to xbes. Multiple segments can be added and it works with both retail and debug executables.
 
 ## Usage
 ```
 XboxImageXploder.exe <xbe_file> <section_name> <section_size>
+
+  xbe_file: 			File path to the xbe file
+  section_name: 		Name of the new code section
+  section_size: 		Size of the new code section
 ```
-Where:
-- xbe_file: File path to the xbe file
-- section_name: Name of the new code section
-- section_size: Size of the new code section
 
 \
 Example usage to create a new segment of 8192 bytes called ".hacks":
