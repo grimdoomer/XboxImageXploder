@@ -28,3 +28,4 @@ File Size:              0x00002000
 The virtual address and size will tell you where in memory the segment is located and how much memory is allocated for it. The file offset and size will tell you where in the xbe file the segment is located. This information can be used for writing your new code based on the virtual memory address, and writing it to the specified file offset in the xbe file.
 
 ## Adding new code
+Coming soon...
