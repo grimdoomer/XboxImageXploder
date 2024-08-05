@@ -7,6 +7,7 @@
 */
 
 #include "XboxExecutable.h"
+#include <assert.h>
 
 XboxExecutable::XboxExecutable(std::string fileName) : sFileName(), vSectionHeaderNames(), sDebugFullFileName(), sDebugFileNameUnicode()
 {
@@ -87,7 +88,7 @@ bool XboxExecutable::ReadExecutable()
 	}
 
 	// Allocate a buffer we can use to read the executable header.
-	DWORD headersSize = pTempHeader->PEBaseAddress - pTempHeader->BaseAddress;
+	DWORD headersSize = pTempHeader->SizeOfHeaders;
 	pbBuffer = (PBYTE)malloc(headersSize);
 	if (pbBuffer == nullptr)
 	{
@@ -265,16 +266,6 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 	if (this->bIsValid == false)
 		return false;
 
-	// Check total header size to make sure there is enough space remaining for new section header + name.
-	DWORD headersSize = this->sHeader.PEBaseAddress - this->sHeader.BaseAddress;
-	DWORD sectionDataSize = sizeof(XBE_IMAGE_SECTION_HEADER) + ALIGN_TO(sectionName.length() + 1, 4);
-	if (headersSize < sectionDataSize)
-	{
-		// Not enough free space in image header to add a new section.
-		printf("Not enough space in image header to add a new section!\n");
-		return false;
-	}
-
 	// Allocate a new array for the section headers.
 	XBE_IMAGE_SECTION_HEADER *pNewSectionHeaders = (XBE_IMAGE_SECTION_HEADER*)malloc(sizeof(XBE_IMAGE_SECTION_HEADER) * (this->sHeader.NumberOfSections + 1));
 	if (pNewSectionHeaders == nullptr)
@@ -308,8 +299,49 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 	// Save the section header name.
 	this->vSectionHeaderNames.push_back(sectionName);
 
+	// Some xbe files will contain the original PE headers and include that data and the logo bitmap into SizeOfHeaders. Others
+	// don't and SizeOfHeaders does not include the size of the logo bitmap. Determine which this xbe uses.
+	bool largeSizeOfHeaders = (this->sHeader.LogoBitmapAddress - this->sHeader.BaseAddress) >= this->sHeader.SizeOfHeaders;
+	bool hasPeHeaders = largeSizeOfHeaders;
+
+	// Check that the xbe does have a PE header if that's what we suspect based on the header size.
+	if (this->sHeader.PEBaseAddress > 0)
+	{
+		WORD wMagic = 0;
+
+		// Seek to where the PE headers should start and check the magic value.
+		SetFilePointer(this->hFileHandle, this->sHeader.PEBaseAddress - this->sHeader.BaseAddress, NULL, FILE_BEGIN);
+		if (ReadFile(this->hFileHandle, &wMagic, 2, &BytesWritten, NULL) == FALSE || BytesWritten != 2)
+		{
+			// Failed to read PE header magic.
+			printf("Failed to read PE header data!\n");
+			return false;
+		}
+
+		// Check if the xbe contains the original PE headers.
+		hasPeHeaders = wMagic == 'ZM';
+		assert(hasPeHeaders != largeSizeOfHeaders);
+	}
+
+	// Calculate the new header size based on whether or not the xbe has the original PE headers.
+	DWORD newHeaderSize = 0;
+	if (hasPeHeaders == true)
+	{
+		// Calculate how much space is between the end of the logo and beginning of the PE headers.
+		DWORD spaceRemaining = this->sHeader.PEBaseAddress - this->sHeader.LogoBitmapAddress;
+		assert(spaceRemaining < this->sHeader.SizeOfHeaders);
+
+		// If there's enough space left over for our new data don't change the header size.
+		if (spaceRemaining >= sizeof(XBE_IMAGE_SECTION_HEADER) + sectionName.length() + 16)
+			newHeaderSize = this->sHeader.SizeOfHeaders;
+		else
+			newHeaderSize = ALIGN_TO(this->sHeader.SizeOfHeaders + sizeof(XBE_IMAGE_SECTION_HEADER) + sectionName.length() + 16, 4096);
+	}
+	else
+		newHeaderSize = ALIGN_TO(this->sHeader.SizeOfHeaders + this->sHeader.LogoBitmapSize + sizeof(XBE_IMAGE_SECTION_HEADER) + sectionName.length() + 16, 4);
+
 	// Allocate a new buffer for the header data.
-	BYTE *pbNewHeader = (PBYTE)malloc(headersSize);
+	BYTE *pbNewHeader = (PBYTE)malloc(newHeaderSize);
 	if (pbNewHeader == nullptr)
 	{
 		// Failed to allocate memory for new header buffer.
@@ -318,7 +350,7 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 	}
 
 	// Initialize the new header buffer.
-	memset(pbNewHeader, 0, headersSize);
+	memset(pbNewHeader, 0, newHeaderSize);
 
 	// Copy the xbe header to the new buffer.
 	XBE_IMAGE_HEADER *pXbeHeader = (XBE_IMAGE_HEADER*)pbNewHeader;
@@ -435,10 +467,83 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 
 	// Update the image size.
 	pXbeHeader->SizeOfImage += ALIGN_TO(pNewSection->VirtualSize, 4);
+	pXbeHeader->SizeOfHeaders = newHeaderSize;
+
+	// Check if we need to copy in the original PE headers.
+	DWORD imageDataStart = FindImageDataStartOffset();
+	if (hasPeHeaders == true)
+	{
+		// Seek to the start of the PE headers.
+		DWORD peHeaderOffset = this->sHeader.PEBaseAddress - this->sHeader.BaseAddress;
+		SetFilePointer(this->hFileHandle, peHeaderOffset, NULL, FILE_BEGIN);
+
+		DWORD peHeadersSize = this->sHeader.SizeOfHeaders - peHeaderOffset;
+		BYTE* pNewPeHeaders = (BYTE*)pXbeHeader + (newHeaderSize - peHeadersSize);
+
+		// Read the PE headers into the new header buffer.
+		assert(newHeaderSize > peHeadersSize);
+		if (ReadFile(this->hFileHandle, pNewPeHeaders, peHeadersSize, &BytesWritten, NULL) == FALSE || BytesWritten != peHeadersSize)
+		{
+			// Failed to read in pe headers.
+			printf("Failed to read original PE headers %d\n", GetLastError());
+			return false;
+		}
+
+		// Update the PE headers address.
+		pXbeHeader->PEBaseAddress = pXbeHeader->BaseAddress + (newHeaderSize - peHeadersSize);
+	}
+
+	// Check if we need to shift the image to fit the new header data.
+	if (imageDataStart < newHeaderSize)
+	{
+		// Seek to the start of the image data.
+		SetFilePointer(this->hFileHandle, imageDataStart, NULL, FILE_BEGIN);
+
+		// Allocate a buffer to hold the image data.
+		DWORD fileSize = GetFileSize(this->hFileHandle, NULL);
+		DWORD imageDataSize = fileSize - imageDataStart;
+		BYTE* pImageDataBuffer = (BYTE*)malloc(imageDataSize);
+		if (pImageDataBuffer == NULL)
+		{
+			// Failed to allocate temp buffer for image data.
+			printf("Failed to allocate temp buffer for image data!\n");
+			return false;
+		}
+
+		// Read the image data into memory.
+		if (ReadFile(this->hFileHandle, pImageDataBuffer, imageDataSize, &BytesWritten, NULL) == FALSE || BytesWritten != imageDataSize)
+		{
+			// Failed to read image data.
+			printf("Failed to read image data!\n");
+			return false;
+		}
+
+		// Calculate how far we need to shift the image data.
+		DWORD shiftSize = newHeaderSize - imageDataStart;
+
+		// Update the file offsets for all image sections.
+		for (int i = 0; i < pXbeHeader->NumberOfSections; i++)
+		{
+			// Update section file offset.
+			pSectionHeaders[i].RawAddress += shiftSize;
+		}
+
+		// Seek to the new image data start and write the image data.
+		SetFilePointer(this->hFileHandle, newHeaderSize, NULL, FILE_BEGIN);
+		if (WriteFile(this->hFileHandle, pImageDataBuffer, imageDataSize, &BytesWritten, NULL) == FALSE || BytesWritten != imageDataSize)
+		{
+			// Failed to write image data.
+			printf("Failed to write image data to file!\n");
+			return false;
+		}
+
+		// Free the temporary image data buffer.
+		free(pImageDataBuffer);
+	}
 
 	// Seek to the beginning of the file and write the new image header.
 	SetFilePointer(this->hFileHandle, 0, nullptr, FILE_BEGIN);
-	if (WriteFile(this->hFileHandle, pbNewHeader, headersSize, &BytesWritten, nullptr) == FALSE || BytesWritten != headersSize)
+	if (WriteFile(this->hFileHandle, pbNewHeader, newHeaderSize, &BytesWritten, nullptr) == FALSE || BytesWritten != newHeaderSize)
 	{
 		// Failed to write new image headers.
 		printf("Failed to write new image headers to file!\n");
@@ -482,4 +587,19 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 
 	// Successfully added the new section to the image.
 	return true;
+}
+
+DWORD XboxExecutable::FindImageDataStartOffset()
+{
+	DWORD lowestOffset = 0xFFFFFFFF;
+
+	// Loop through all the sections and find the lowest image offset.
+	for (int i = 0; i < this->sHeader.NumberOfSections; i++)
+	{
+		// Check if this section is the lowest we've seen so far.
+		if (this->pSectionHeaders[i].RawAddress < lowestOffset)
+			lowestOffset = this->pSectionHeaders[i].RawAddress;
+	}
+
+	return lowestOffset;
 }

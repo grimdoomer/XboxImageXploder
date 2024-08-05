@@ -56,7 +56,7 @@ struct XBE_IMAGE_HEADER
 	/* 0x130 */ DWORD		PEStackCommit;
 	/* 0x134 */ DWORD		PEHeapReserve;
 	/* 0x138 */ DWORD		PEHeapCommit;
-	/* 0x13C */ DWORD		PEBaseAddress;
+	/* 0x13C */ DWORD		PEBaseAddress;						// From the original PE header, may be NULL or not correlate with XBE headers
 	/* 0x140 */ DWORD		PESizeOfImage;
 	/* 0x144 */ DWORD		PEChecksum;
 	/* 0x148 */ DWORD		PETimestamp;
@@ -162,6 +162,8 @@ private:
 	std::wstring				sDebugFileNameUnicode;
 
 	BYTE						*pbLogoBitmap;
+
+	DWORD FindImageDataStartOffset();
 
 public:
 	XboxExecutable(std::string fileName);
