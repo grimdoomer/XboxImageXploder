@@ -337,11 +337,20 @@ bool XboxExecutable::AddSectionForHacks(std::string sectionName, int sectionSize
 	DWORD headerSizeRequired = ALIGN_TO(sizeof(XBE_IMAGE_SECTION_HEADER) + sectionName.length() + 16, 4);
 	if (headerSizeRequired > headerSizeRemaining)
 	{
-		// TODO: If the xbe has PE headers we might be able to strip them to make more space, maybe remove library versions, or bitmap data?
-
-		// Not enough space remaining in the header to add a new section.
-		printf("Not enough space in XBE header to add new section data! Adding a new section not possible!\n");
-		return false;
+		// Check if the image still has the PE headers and determine if discarding them will help.
+		if (hasPeHeaders == true && this->sHeader.SizeOfHeaders - logoBitmapEndOffset >= headerSizeRequired)
+		{
+			// Discard the PE headers to make room for the new section headers.
+			printf("Not enough space in XBE header to add new section data, PE headers will be discarded...\n");
+			this->sHeader.PEBaseAddress = 0;
+			hasPeHeaders = false;
+		}
+		else
+		{
+			// Not enough space remaining in the header to add a new section.
+			printf("Not enough space in XBE header to add new section data! Adding a new section not possible!\n");
+			return false;
+		}
 	}
 
 	// Allocate a new buffer for the header data.

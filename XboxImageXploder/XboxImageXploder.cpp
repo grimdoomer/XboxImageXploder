@@ -12,7 +12,7 @@ void PrintUse()
 
 int main(int argc, char **argv)
 {
-	printf("XboxImageXploder v1.1 by Grimdoomer\n\n");
+	printf("XboxImageXploder v1.2 by Grimdoomer\n\n");
 
 	// Check if the correct number of arguments were provided.
 	if (argc != 4)
